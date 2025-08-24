@@ -1,0 +1,12 @@
+loki:
+  enabled: true
+
+promtail:
+  enabled: true
+  config:
+    snippets:
+      pipelineStages:
+        - cri: {}
+
+datasource:
+  enabled: false
