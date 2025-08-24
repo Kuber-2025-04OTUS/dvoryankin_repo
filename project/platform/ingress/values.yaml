@@ -1,4 +1,6 @@
 controller:
+  extraArgs:
+    enable-json-logging: "true"
   publishService:
     enabled: true
   service:

@@ -2,28 +2,29 @@ name: build-and-deploy
 
 on:
   push:
-    branches: ["**"]
+    branches: ['**']
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/frontend
 
 permissions:
   contents: read
   packages: write
 
-env:
-  IMAGE_REPO: ghcr.io/${{ github.repository }}
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.norm.outputs.repo_lc }}
+      sha:   ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Normalize image name to lowercase
-        id: img
+        id: norm
         run: |
-          echo "repo_lc=$(echo '${{ env.IMAGE_REPO }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+          echo repo_lc=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]') >> $GITHUB_OUTPUT
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -32,31 +33,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
       - name: Build & Push image
-        run: |
-          IMAGE="$(echo 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/frontend:${{ github.sha }}"
-          docker build -t "$IMAGE" -f project/src/frontend/Dockerfile .
-          docker push "$IMAGE"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: project/src/frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.norm.outputs.repo_lc }}:${{ github.sha }}
 
   deploy:
     needs: build
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Prepare kubeconfig
+        run: echo "${KUBECONFIG_B64}" | base64 -d > kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
 
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v4
         with:
-          version: "v1.32.1"
+          version: 'v1.32.1'
 
-      - name: Write kubeconfig from secret
+      - name: Rollout frontend
+        env:
+          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+          IMAGE: ${{ needs.build.outputs.image }}
+          SHA:   ${{ needs.build.outputs.sha }}
         run: |
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > kubeconfig
-          echo "KUBECONFIG=$PWD/kubeconfig" >> $GITHUB_ENV
-
-      - name: Set image and rollout
-        run: |
-          IMAGE="$(echo 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/frontend:${{ github.sha }}"
-          kubectl -n default set image deploy/frontend frontend="$IMAGE"
+          kubectl -n default set image deploy/frontend frontend=${IMAGE}:${SHA} --record || true
           kubectl -n default rollout status deploy/frontend --timeout=180s
