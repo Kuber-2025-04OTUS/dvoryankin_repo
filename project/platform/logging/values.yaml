@@ -3,24 +3,22 @@ loki:
 
 promtail:
   enabled: true
-  config:
-    snippets:
-      pipelineStages:
-        - match:
-            selector: '{namespace="ingress-nginx", container="controller"}'
-            stages:
-              - json
-              - labels:
-                  status:
-                  method:
-                  path:
-                  host:
-              - metrics:
-                  - type: Counter
-                    name: nginx_requests_total
-                    description: "nginx requests"
-                    labels: {status: "", method: "", host: ""}
-                    value: 1
+
+  extraVolumes:
+    - name: varlogpods
+      hostPath:
+        path: /var/log/pods
+    - name: varlogcontainers
+      hostPath:
+        path: /var/log/containers
+
+  extraVolumeMounts:
+    - name: varlogpods
+      mountPath: /var/log/pods
+      readOnly: true
+    - name: varlogcontainers
+      mountPath: /var/log/containers
+      readOnly: true
 
 datasource:
   enabled: false

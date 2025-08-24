@@ -2,11 +2,8 @@ name: build-and-deploy
 
 on:
   push:
-    branches: [ "main", "project/managed-shop-otus" ]
-  workflow_dispatch: {}
-
-env:
-  IMAGE_NAME: dvoryankin_repo/frontend
+    branches: [ main, project/managed-shop-otus ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,58 +11,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Normalize image name to lowercase
-        id: repo_lc
-        run: echo "repo_lc=$(echo 'ghcr.io/${{ github.repository }}/frontend' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ secrets.GHCR_USER }}
-          password: ${{ secrets.GHCR_PAT }}
-
-      - name: Build & Push image
+      - name: Build image (no push)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: project/src/frontend/Dockerfile
           platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ secrets.GHCR_USER }}/dvoryankin_repo/frontend:${{ github.sha }}
-            ghcr.io/${{ secrets.GHCR_USER }}/dvoryankin_repo/frontend:latest
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=${{ github.repository }}
-      - name: Export outputs
-        run: |
-          echo "image=$(echo 'ghcr.io/${{ secrets.GHCR_USER }}/dvoryankin_repo/frontend' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-          echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-        id: out
-    outputs:
-      image: ${{ steps.out.outputs.image }}
-      sha: ${{ steps.out.outputs.sha }}
+          push: false
 
   deploy:
-    needs: build
     runs-on: ubuntu-latest
-    if: github.ref_name == 'main'
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Write kubeconfig
         run: |
           echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > kubeconfig
           echo "KUBECONFIG=$PWD/kubeconfig" >> $GITHUB_ENV
 
-      - name: Set IMAGE env
-        run: |
-          echo "IMAGE=$(echo 'ghcr.io/${{ secrets.GHCR_USER }}/dvoryankin_repo/frontend' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
-
-      - name: kubectl set image + rollout
-        env:
-          KUBECONFIG: ${{ github.workspace }}/kubeconfig
-          IMAGE: ${{ needs.build.outputs.image }}
-          SHA: ${{ needs.build.outputs.sha }}
-        run: |
-          kubectl -n default set image deploy/frontend server="${IMAGE}:${SHA}" --record
-          kubectl -n default rollout status deploy/frontend --timeout=180s
+      - name: Rollout status
+        run: kubectl -n default rollout status deploy/frontend --timeout=180s
