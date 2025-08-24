@@ -3,31 +3,11 @@ loki:
 
 promtail:
   enabled: true
-  config:
-    snippets:
-      pipelineStages:
-        - match:
-            selector: '{namespace="ingress-nginx", container="controller"}'
-            stages:
-              - json
-              - labels:
-                  status:
-                  method:
-                  path:
-                  host:
-              - timestamp:
-                  source: time
-                  format: RFC3339
-              - metrics:
-                  - type: Counter
-                    name: nginx_requests_total
-                    description: "nginx requests"
-                    labels: {status: "", method: "", host: ""}
-                    value: 1
+
   extraScrapeConfigs:
-    - job_name: kubernetes-pods-json
+    - job_name: kubernetes-pods-ingress-json
       pipeline_stages:
-        - cri: { }                # нормализация строк CRI
+        - cri: {}
         - json:
             expressions:
               status: status
@@ -43,10 +23,13 @@ promtail:
         - role: pod
       relabel_configs:
         - action: keep
-          source_labels: [ __meta_kubernetes_pod_label_app_kubernetes_io/name ]
+          source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io/name]
           regex: ingress-nginx
+        - action: keep
+          source_labels: [__meta_kubernetes_pod_container_name]
+          regex: controller
         - action: replace
-          source_labels: [ __meta_kubernetes_pod_node_name ]
+          source_labels: [__meta_kubernetes_pod_node_name]
           target_label: node
 
 datasource:
