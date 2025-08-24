@@ -1,21 +1,19 @@
-# Managed K8s: Online Boutique Platform (Ingress + Monitoring + Logging + CI/CD)
+# Managed K8s: Online Boutique (Ingress + Monitoring + Logging + CI/CD)
 
-Проектный скелет для защиты: Managed Kubernetes кластер, публичный ingress + домен (nip.io), мониторинг (kube-prometheus-stack) c алертами, централизованные логи (Loki+Promtail), CI/CD (GitLab CI) для пересборки `frontend`.
+Готовый скелет для защиты: Managed Kubernetes, публичный ingress + nip.io, мониторинг (kube-prometheus-stack) с алертами, централизованные логи (Loki+Promtail), CI/CD в **GitHub Actions** (сборка фронта и деплой в кластер).
 
-## 0) Требования и инструменты
+## 0) Требования
 
-- **Kubernetes**: Managed-кластер в любом облаке (YC/EKS/GKE/DO).
-- **Утилиты:** `kubectl`, `helm` (v3), `envsubst` (часть пакета `gettext`), `yq` (опц.).
-- **Доступ в интернет** для установки чарта и деплоя приложения.
-- **Публичный IP** у `ingress-nginx` и домен вида `shop.<EXTERNAL-IP>.nip.io`.
+- Managed Kubernetes (YC/EKS/GKE/DO и т.п.), `kubectl`, `helm` (v3).
+- Внешний IP для `ingress-nginx` и домен `shop.<EXTERNAL-IP>.nip.io`.
+- GitHub репозиторий + доступ к GHCR (GitHub Container Registry).
 
-## 1) Кластер (пример для Yandex Cloud, можно пропустить если кластер уже есть)
+## 1) Ingress
 
-Смотрите `infra/yc/*` — там базовые скрипты создания и очистки. Либо создайте в веб‑консоли.
-Получите контекст доступа и проверьте:
 ```bash
-yc managed-kubernetes cluster get-credentials demo-cluster --external --force
-kubectl get nodes
+./scripts/01_install_ingress.sh
+kubectl -n ingress-nginx get svc ingress-nginx-controller
+# SHOP_HOST будет: shop.<EXTERNAL-IP>.nip.io
 ```
 
 ## 2) Установка ingress-nginx и получение домена
