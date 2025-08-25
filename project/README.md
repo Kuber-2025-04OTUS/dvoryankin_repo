@@ -1,113 +1,245 @@
-# Managed K8s: Online Boutique (Ingress + Monitoring + Logging + CI/CD)
+# Managed K8s: Online Boutique (Ingress, Monitoring, Logging, CI/CD)
 
-Готовый скелет для защиты: Managed Kubernetes, публичный ingress + nip.io, мониторинг (kube-prometheus-stack) с алертами, централизованные логи (Loki+Promtail), CI/CD в **GitHub Actions** (сборка фронта и деплой в кластер).
+Managed Kubernetes‑кластер, публичный ingress + домен (`nip.io`), мониторинг (kube‑prometheus‑stack) c алертами,  логи (Loki+Promtail), CI/CD (GitHub Actions) для сборки и раскатки `frontend` из Online Boutique.
 
-## 0) Требования
+---
 
-- Managed Kubernetes (YC/EKS/GKE/DO и т.п.), `kubectl`, `helm` (v3).
-- Внешний IP для `ingress-nginx` и домен `shop.<EXTERNAL-IP>.nip.io`.
-- GitHub репозиторий + доступ к GHCR (GitHub Container Registry).
+## Содержание
+- [Требования](#требования)
+- [Быстрый старт](#быстрый-старт)
+- [Ingress и домен](#ingress-и-домен)
+- [Деплой приложения](#деплой-приложения)
+- [Мониторинг (Prometheus/Grafana)](#мониторинг-prometheusgrafana)
+- [Логи (Loki/Promtail)](#логи-lokipromtail)
+- [CI/CD (GitHub Actions + GHCR)](#cicd-github-actions--ghcr)
+- [Проверки](#проверки)
+- [Очистка](#очистка)
+- [Структура репозитория](#структура-репозитория)
+- [Требуемые скриншоты для отчёта](#требуемые-скриншоты-для-отчёта)
+- [FAQ](#faq)
 
-## 1) Ingress
+---
+
+## Требования
+
+- **Kubernetes**: Managed‑кластер в облаке (YC).
+- **Утилиты на рабочей машине:** `kubectl`, `helm` (v3), `envsubst` (`gettext`), `yq` (по желанию).
+- **Публичный IP** у `ingress-nginx` и домен вида `shop.<EXTERNAL-IP>.nip.io`.
+
+> Пример ниже использует неймспейс `observability` для мониторинга/логов и `default` для приложения.
+
+---
+
+## Быстрый старт
 
 ```bash
+# 1) Ingress
 ./scripts/01_install_ingress.sh
 kubectl -n ingress-nginx get svc ingress-nginx-controller
-# SHOP_HOST будет: shop.<EXTERNAL-IP>.nip.io
+
+# 2) Приложение Online Boutique + Ingress
+./scripts/02_deploy_app.sh
+kubectl get ingress
+
+# 3) Мониторинг (Prometheus/Grafana/Alertmanager)
+./scripts/03_install_monitoring.sh
+kubectl -n observability get pods
+
+# 4) Логи (Loki+Promtail)
+./scripts/04_install_logging.sh
+kubectl -n observability get pods -l app.kubernetes.io/name=promtail
+
+# 5) Локальный доступ (порт‑форварды)
+kubectl -n observability port-forward svc/kps-kube-prometheus-stack-prometheus 9090:9090
+kubectl -n observability port-forward deploy/kps-grafana 3000:3000
 ```
 
-## 2) Установка ingress-nginx и получение домена
+В браузере:
+- **Prometheus:** http://localhost:9090/targets (все цели зелёные)
+- **Grafana:** http://localhost:3000  (admin/admin123)
+
+---
+
+## Ingress и домен
+
+Скрипт `01_install_ingress.sh` ставит `ingress-nginx` с включёнными метриками и ServiceMonitor.
+После установки получи внешний IP балансировщика:
 
 ```bash
-./scripts/01_install_ingress.sh
-# дождитесь EXTERNAL-IP у ingress-nginx-controller и запомните его
-kubectl -n ingress-nginx get svc
+kubectl -n ingress-nginx get svc ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}'; echo
 ```
 
-Хост для магазина будет: `shop.<EXTERNAL-IP>.nip.io` (пример: `shop.203.0.113.10.nip.io`).
+Хост магазина будет `shop.<EXTERNAL-IP>.nip.io` (пример: `shop.203.0.113.10.nip.io`).
 
-## 3) Деплой Online Boutique + Ingress
+---
+
+## Деплой приложения
 
 ```bash
 ./scripts/02_deploy_app.sh
-# скрипт сам определит EXTERNAL-IP и сгенерирует Ingress на shop.<IP>.nip.io
+# скрипт сам определит IP и сгенерирует Ingress на shop.<IP>.nip.io
 kubectl get ingress
 ```
 
-Проверьте в браузере: `http://shop.<EXTERNAL-IP>.nip.io` — откроется главная страница магазина.
+`http://shop.<EXTERNAL-IP>.nip.io`.
 
-## 4) Мониторинг (Prometheus+Grafana+Alertmanager) + алерты
+---
+
+## Мониторинг (Prometheus/Grafana)
 
 ```bash
 ./scripts/03_install_monitoring.sh
-# Grafana НЕ публикуется наружу — см. README ниже для логина и дашбордов
+kubectl -n observability get pods
 ```
 
-В составе включены:
-- включён сбор метрик `ingress-nginx` (ServiceMonitor);
-- пример алерта на высокий уровень 5xx;
-- преднастройки Grafana (admin/admin123).
+- Установлен `kube-prometheus-stack`.
+- Включён сбор метрик `ingress-nginx` (ServiceMonitor).
+- Пример **алерта** на высокий уровень 5xx: `platform/monitoring/alerts/ingress-5xx.yaml`.
+- Логин в Grafana: см. секрет (или значение из values):
+  ```bash
+  kubectl -n observability get secret kps-grafana -o jsonpath="{.data.admin-password}" | base64 -d; echo
+  ```
 
-Сделайте скриншоты дашбордов/алертов в `docs/` для защиты.
+### Полезные дашборды
+- K8s / Nodes / Pods / Workloads (идут в составе чарта).
+- Свой дашборд для ingress‑логов можно добавить ConfigMap’ом (пример ниже в разделе **Логи**).
 
-## 5) Централизованные логи (Loki + Promtail)
+---
+
+## Логи (Loki/Promtail)
 
 ```bash
 ./scripts/04_install_logging.sh
+kubectl -n observability get pods -l app.kubernetes.io/name=promtail
 ```
 
-Откройте Grafana → Explore → Loki и найдите логи по `namespace="default"` и по имени пода `frontend`.
+В Grafana → **Explore** → источник **Loki**.
+Примеры запросов **LogQL**:
 
-## 6) CI/CD (GitLab CI)
+```logql
+{namespace="default", container="server"}
+```
 
-Файл: `.gitlab-ci.yml` — сборка образа фронта и деплой через `kubectl set image`.
-В настройках проекта GitLab добавьте **CI Variables**:
-- `REGISTRY` — адрес реестра (например, `cr.yandex/<registry-id>` или `registry.gitlab.com/<user>/<repo>`),
-- `REG_USER`, `REG_PASSWORD` — учётка реестра,
-- `KUBECONFIG_B64` — содержимое kubeconfig, **base64**.
-- (опц.) `IMAGE_TAG` — если хотите фиксированный тег, по умолчанию берётся `CI_COMMIT_SHORT_SHA`.
+Ошибки 5xx по ingress‑контроллеру (если включён JSON‑парсинг в promtail):
+```logql
+sum by (status) (
+  count_over_time({namespace="ingress-nginx", container="controller"} | json | status >= 500 [5m])
+)
+```
 
-Пайплайн: коммит в ветку → `build` → `push` → на `main` выполняется `deploy` с обновлением тега контейнера в `Deployment/frontend`.
+### Примечание для containerd
+Если нода без `/var/lib/docker/containers`, promtail может падать. Включённые монтирования: `/var/log/pods` и `/var/log/containers`. Если нужно, уберите docker‑путь в `platform/logging/values.yaml` и обновите:
+```bash
+helm -n observability upgrade --install loki grafana/loki-stack -f platform/logging/values.yaml
+```
 
-## 7) Полезные команды проверки
+### Свой дашборд в Grafana
+```bash
+kubectl -n observability create configmap grafana-dashboard-ingress \
+  --from-file=project/platform/monitoring/grafana/ingress-observability.json \
+  -o yaml --dry-run=client | kubectl apply -f -
+
+kubectl -n observability label cm grafana-dashboard-ingress grafana_dashboard=1 --overwrite
+kubectl -n observability rollout restart deploy/kps-grafana
+```
+
+---
+
+## CI/CD (GitHub Actions + GHCR)
+
+Ветка `main` → **build** → **deploy**.
+
+### Секреты репозитория (Settings → Secrets and variables → Actions → Secrets)
+
+- `KUBECONFIG_B64` — kubeconfig в base64 (можно сгенерировать скриптом `infra/k8s/ci/kubeconfig-from-sa.sh`).
+- `GHCR_USER` — логин в GitHub (например, `dvoryankin`).
+- `GHCR_PAT` — персональный токен с правами `write:packages` (см. «FAQ»).
+  > Если репозиторий в организации, которая **не** даёт GitHub Actions публиковать пакеты, публикуйте образ в пространстве пользователя: `ghcr.io/<ваш-логин>/dvoryankin_repo/frontend`.
+
+### Что делает pipeline
+1. **Build**: собирает образ `project/src/frontend/Dockerfile` от `gcr.io/google-samples/...:v0.8.0`, пушит в GHCR:
+    - `ghcr.io/<owner>/dvoryankin_repo/frontend:<full-sha>`
+    - `ghcr.io/<owner>/dvoryankin_repo/frontend:latest`
+      Экспортируются `image` и `sha` как outputs.
+2. **Deploy** (только для `main`):
+    - пишет kubeconfig из `KUBECONFIG_B64`,
+    - выполняет:
+      ```bash
+      kubectl -n default set image deploy/frontend server="${IMAGE}:${SHA}" --record
+      kubectl -n default rollout status deploy/frontend --timeout=180s
+      ```
+
+### imagePullSecret для приватного GHCR
+```bash
+kubectl -n default create secret docker-registry ghcr-creds \
+  --docker-server=ghcr.io \
+  --docker-username=$GHCR_USER \
+  --docker-password=$GHCR_PAT \
+  --docker-email=you@example.com
+
+kubectl -n default patch sa default -p '{"imagePullSecrets":[{"name":"ghcr-creds"}]}'
+```
+
+---
+
+## Проверки
 
 ```bash
 # Внешний IP ingress
 kubectl -n ingress-nginx get svc ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}'; echo
 
-# Состояние приложения
-kubectl get pods -o wide
+# Приложение
 kubectl -n default get deploy,svc,ingress
+kubectl -n default describe deploy/frontend | grep -i image:
+kubectl -n default logs deploy/frontend -c server --tail=100
 
-# Мониторинг
-kubectl -n observability get pods
-kubectl -n observability get prometheusrule
+# Prometheus
+kubectl -n observability get pods -l "app.kubernetes.io/name=grafana"
+kubectl -n observability port-forward svc/kps-kube-prometheus-stack-prometheus 9090:9090
 
-# Логи фронта
-kubectl logs deploy/frontend -c server -f --tail=100
-```
-
-## 8) Очистка (чтобы не тратить деньги)
-
-```bash
-./scripts/90_cleanup.sh
-# Удалит платформенные релизы и приложение. Кластер удаляйте самостоятельно (или infra/yc/cleanup.sh).
+# Loki/Promtail
+kubectl -n observability get pods -l "app.kubernetes.io/name=promtail" -o wide
+kubectl -n observability logs ds/loki-promtail -c promtail --tail=50
 ```
 
 ---
 
-### Где что лежит
-```
-platform/ingress/values.yaml           # ingress-nginx (LB + metrics + servicemonitor)
-platform/monitoring/values.yaml        # kube-prometheus-stack overrides
-platform/monitoring/alerts/ingress-5xx.yaml # пример алерта на высокий 5xx
-platform/logging/values.yaml           # loki-stack (promtail включён)
+## Очистка
 
-apps/online-boutique/ingress.yaml.tmpl # шаблон Ingress для фронта
-scripts/*.sh                           # инсталляция по шагам
-.gitlab-ci.yml                         # CI/CD для фронта
+```bash
+./scripts/90_cleanup.sh
+# удалит платформенные релизы и приложение (кластер удаляется отдельно)
 ```
 
-**Grafana:** логин/пароль: `admin / admin123` (меняем в `platform/monitoring/values.yaml`).  
-**Безопасность:** Grafana не публикуется наружу в этом скелете. Для защиты достаточно скриншотов.
+---
+
+## Структура репозитория
+
+```
+platform/ingress/values.yaml               # ingress-nginx (LB + metrics + servicemonitor)
+platform/monitoring/values.yaml            # kube-prometheus-stack overrides
+platform/monitoring/alerts/ingress-5xx.yaml
+platform/logging/values.yaml               # loki-stack (promtail включён)
+
+apps/online-boutique/ingress.yaml.tmpl     # шаблон Ingress для фронта
+scripts/*.sh                               # пошаговые инсталляторы
+.github/workflows/cicd.yml                 # GitHub Actions (build+deploy фронта)
+```
+
+---
+
+## Скриншоты
+
+1. **GitHub Actions** — зелёные `build` и `deploy`.
+2. **GHCR** — страница пакета `dvoryankin_repo/frontend` с последним тегом.
+3. **Prometheus** — `/targets` со всеми зелёными целями.
+4. **Grafana → Explore (Loki)** — логи контейнера `server` (`namespace="default"`).
+5. **Grafana → Дашборд ingress** (если подключали ConfigMap с JSON).
+6. **kubectl get ingress** — домен `shop.<IP>.nip.io`.
+7. **kubectl describe deploy/frontend | image** — факт обновления образа.
+
+Скрины в `project/docs/`
+
+---
+
 
